@@ -1,0 +1,204 @@
+---
+title: "HW5"
+author: "Songyu Tang"
+date:  "Fall 2024"
+output: 
+  pdf_document:
+      latex_engine: xelatex
+---
+## read and explore the data
+
+Set-up
+```{r setup, include=FALSE}
+#| label: load libraries and set options
+#| warning: false
+#| message: false
+#| 
+
+library(knitr)  
+library(kableExtra)
+library(tidyverse)
+```
+
+Read the data and take a first look
+
+```{r cars}
+#| label: read data - glimpse 
+
+strawberry <- read_csv("strawberries25_v3.csv", col_names = TRUE)
+
+glimpse(strawberry)
+```
+
+I have 12699 rows and 21 columns.
+
+All I can see from the glimpse is I have date, location, values and coefficients of variation.
+
+## remove columns with a single value in all rows
+```{r}
+#|label: function def - drop 1-item columns
+
+drop_one_value_col <- function(df){   ## takes whole dataframe
+drop <- NULL  
+
+## test each column for a single value
+for(i in 1:dim(df)[2]){     
+if((df |> distinct(df[,i]) |> count()) == 1){
+drop = c(drop, i)
+} }
+
+## report the result -- names of columns dropped
+## consider using the column content for labels 
+## or headers 
+
+if(is.null(drop)){return("none")}else{
+
+   print("Columns dropped:")
+   print(colnames(df)[drop])
+   strawberry <- df[, -1*drop]
+   }
+}
+
+
+## use the function
+
+strawberry <- drop_one_value_col(strawberry)
+glimpse(strawberry)
+```
+## separate composite columns
+
+### `Data Item` into two columns
+```{r}
+#|label: split Data Item
+
+  strawberry <- strawberry |>
+  separate_wider_delim(  cols = `Data Item`,
+                         delim = "-",
+                         names = c("column1",
+                                 "column2"),
+                         too_many = "merge",
+                         too_few = "align_start"
+                       )
+```
+
+```{r}
+strawberry <- strawberry |>
+  separate_wider_delim(  cols = `column1`,
+                         delim = ",",
+                         names = c("Fruit",
+                                 "Category"),
+                         too_many = "merge",
+                         too_few = "align_start"
+                       )
+strawberry$Fruit <- str_trim(strawberry$Fruit, side = "both")
+strawberry$Category <- str_trim(strawberry$Category, side = "both")
+strawberry$column2 <- str_trim(strawberry$column2, side = "both")
+strawberry <- drop_one_value_col(strawberry)
+unique(strawberry$Category)
+```
+
+Next, we want to set string in the Category into different columns. According to the standard from nass, we put fresh market and processing into "Marketing Channels", put organic into "Method", put bearing into "Class", put Utilized into "utilization", put not sold into "Measurement".
+```{r}
+#|label: Clean data in the Category
+strawberry <- strawberry %>%
+  mutate(Marketing_channels = ifelse(str_detect(Category, "FRESH MARKET|PROCESSING"),
+                                      str_extract(Category, "FRESH MARKET|PROCESSING"), NA)) %>%
+  mutate(Utilizations = ifelse(str_detect(Category, "UTILIZED"),
+                               str_extract(Category, "UTILIZED"), NA)) %>%
+  mutate(Method = ifelse(str_detect(Category, "ORGANIC"),
+                         str_extract(Category, "ORGANIC"), NA)) %>%
+  mutate(Class = ifelse(str_detect(Category, "BEARING"),
+                        str_extract(Category, "BEARING"), NA)) %>%
+  mutate(Measurement = ifelse(str_detect(Category, "NOT SOLD"),
+                              str_extract(Category, "NOT SOLD"), NA)) %>% 
+  select(1:match("County ANSI", names(.)), Class, Method, Marketing_channels, Utilizations, Measurement, column2, everything()) %>% 
+  select( -Category)
+```
+
+Then, we have to clean data in "column2".
+```{r}
+strawberry <- strawberry %>%
+  mutate(
+    Measurement1 = ifelse(str_detect(column2, ","),
+                          str_split_fixed(column2, ",", 2)[, 1],
+                          column2),  
+    Metric1 = ifelse(str_detect(column2, ","),
+                    str_split_fixed(column2, ",", 2)[, 2],
+                    NA) 
+  ) %>% 
+  select(1:match("Measurement", names(.)), Measurement1, Metric1, everything()) %>% 
+  select( -column2)
+```  
+Finally, we are going to classify all the string in their positions
+```{r}
+strawberry <- strawberry %>%
+  mutate(Metric = str_extract(Metric1, "(?<=,|^)[^,]*MEASURED IN[^,]*(?=,|$)")) %>%
+  mutate(Remark = str_remove_all(Metric1, "(?<=,|^)[^,]*MEASURED IN[^,]*(,)?")) %>%
+  mutate(Remark = str_trim(str_replace_all(Remark, "^,|,$|,,", ""))) %>%
+  select(1:match("Measurement1", names(.)), Metric, Remark, everything())  %>% 
+  select(-Metric1)
+strawberry <- strawberry %>%
+  mutate(Category = ifelse(is.na(Measurement), 
+                           Measurement1,
+                           paste(Measurement, Measurement1, sep = " ") 
+                           )) %>% 
+  select(1:match("Utilizations", names(.)), Category, everything()) %>% 
+  select(-Measurement,-Measurement1)
+glimpse(strawberry)
+```
+
+## Transfer data type into correct one
+
+In 'strawberry', we find that 'Value' and 'CV(%)' columns are both string type, which is not correct for the numeric. Also, we have to transfer data like (D) into NA, (L) into 0.05, (H) into 99.95, and (Z) into 0.0005 based on the Quick Stats Glossary.
+```{r}
+strawberry <- strawberry %>%
+  mutate(Value = ifelse(Value == "(D)", NA, Value)) %>%
+  mutate(Value = ifelse(Value == "(NA)", NA, Value)) %>% 
+  mutate(Value = ifelse(Value == "(Z)", "0.0005", Value)) %>% 
+  mutate(Value = str_replace_all(Value,",","")) %>% 
+  mutate(Value = as.numeric(Value))
+strawberry <- strawberry %>%
+  mutate(`CV (%)` = ifelse(`CV (%)` == "(D)", NA, `CV (%)`)) %>%
+  mutate(`CV (%)` = ifelse(`CV (%)` == "(NA)", NA, `CV (%)`)) %>% 
+  mutate(`CV (%)` = ifelse(`CV (%)` == "(L)", "0.05", `CV (%)`)) %>% 
+  mutate(`CV (%)` = ifelse(`CV (%)` == "(H)", "99.95", `CV (%)`)) %>% 
+  mutate(`CV (%)` = str_replace_all(`CV (%)`,",","")) %>% 
+  mutate(`CV (%)` = as.numeric(`CV (%)`))
+glimpse(strawberry)
+```
+## Seperate Domain and Domain Category
+In both of sections, we find that expect TOTAL in Domain and NOT SPECIFIED in 'Domain Category', other string in two sections have a high similarity, like AREA GROWN in 'Domain' is the same the front character of 'AREA GROWN: (0.1 TO 0.9 ACRES)' in 'Domain Category'. Therefore, we want to split 'Domain Category' and delete the '()' and the same character in 'Domain'
+```{r}
+strawberry <- strawberry %>%
+  mutate(`Domain Category` = ifelse(str_detect(`Domain Category`, ":"),
+                              str_split_fixed(`Domain Category`, ":", 2)[, 2],
+                              `Domain Category`)) %>%
+  mutate(`Domain Category` = str_replace_all(`Domain Category`, "[\\(\\)]", ""))
+strawberry$`Domain Category` <- str_trim(strawberry$`Domain Category`, side = "both")
+```
+Then, we want separate data in 'Domain Category' into the specific chemical and the numbers
+```{r}
+strawberry <- strawberry %>%
+  mutate(Chemical_Number = ifelse(str_detect(`Domain Category`, "="),
+                                  str_split_fixed(`Domain Category`, "=", 2)[, 2], 
+                                  NA)) %>%
+  mutate(`Domain Category` = ifelse(str_detect(`Domain Category`, "="),
+                              str_split_fixed(`Domain Category`, "=", 2)[, 1],  
+                              `Domain Category`)) %>% 
+  select(1:match("Domain Category", names(.)), Chemical_Number, everything())
+strawberry$`Domain Category` <- str_trim(strawberry$`Domain Category`, side = "both")
+strawberry$Chemical_Number <- str_trim(strawberry$Chemical_Number, side = "both")
+```
+Finally, delete all 'CHEMICAL' in the 'Domain'
+```{r}
+strawberry <- strawberry %>%
+  mutate(Domain = str_replace(Domain, "CHEMICAL, ", ""))
+glimpse(strawberry)
+```
+
+## Write in a new csv
+As we have done data cleaning, we want to get a new csv that contains all the data we have cleaned
+```{r}
+write.csv(strawberry, "Strawberry_cleaned.csv", row.names = FALSE)
+```
+
