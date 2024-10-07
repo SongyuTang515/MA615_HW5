@@ -147,25 +147,6 @@ strawberry <- strawberry %>%
 glimpse(strawberry)
 ```
 
-## Transfer data type into correct one
-
-In 'strawberry', we find that 'Value' and 'CV(%)' columns are both string type, which is not correct for the numeric. Also, we have to transfer data like (D) into NA, (L) into 0.05, (H) into 99.95, and (Z) into 0.0005 based on the Quick Stats Glossary.
-```{r}
-strawberry <- strawberry %>%
-  mutate(Value = ifelse(Value == "(D)", NA, Value)) %>%
-  mutate(Value = ifelse(Value == "(NA)", NA, Value)) %>% 
-  mutate(Value = ifelse(Value == "(Z)", "0.0005", Value)) %>% 
-  mutate(Value = str_replace_all(Value,",","")) %>% 
-  mutate(Value = as.numeric(Value))
-strawberry <- strawberry %>%
-  mutate(`CV (%)` = ifelse(`CV (%)` == "(D)", NA, `CV (%)`)) %>%
-  mutate(`CV (%)` = ifelse(`CV (%)` == "(NA)", NA, `CV (%)`)) %>% 
-  mutate(`CV (%)` = ifelse(`CV (%)` == "(L)", "0.05", `CV (%)`)) %>% 
-  mutate(`CV (%)` = ifelse(`CV (%)` == "(H)", "99.95", `CV (%)`)) %>% 
-  mutate(`CV (%)` = str_replace_all(`CV (%)`,",","")) %>% 
-  mutate(`CV (%)` = as.numeric(`CV (%)`))
-glimpse(strawberry)
-```
 ## Seperate Domain and Domain Category
 In both of sections, we find that expect TOTAL in Domain and NOT SPECIFIED in 'Domain Category', other string in two sections have a high similarity, like AREA GROWN in 'Domain' is the same the front character of 'AREA GROWN: (0.1 TO 0.9 ACRES)' in 'Domain Category'. Therefore, we want to split 'Domain Category' and delete the '()' and the same character in 'Domain'
 ```{r}
@@ -193,6 +174,26 @@ Finally, delete all 'CHEMICAL' in the 'Domain'
 ```{r}
 strawberry <- strawberry %>%
   mutate(Domain = str_replace(Domain, "CHEMICAL, ", ""))
+glimpse(strawberry)
+```
+
+## Transfer data type into correct one
+
+In 'strawberry', we find that 'Value' and 'CV(%)' columns are both string type, which is not correct for the numeric. With EDA, (D) means that data exists but not provided because of privacy, with some (D) we can just use sum to estimate every single area, some may need some investigation. In this case, we have to analyze different (D) under different circumstance. In this case, I just transfer it into NA Also, we transfer (L) into 0.05, (H) into 99.95, and (Z) into 0.0005 based on the Quick Stats Glossary.
+```{r}
+strawberry <- strawberry %>%
+  mutate(Value = ifelse(Value == "(D)", NA, Value)) %>%
+  mutate(Value = ifelse(Value == "(NA)", NA, Value)) %>% 
+  mutate(Value = ifelse(Value == "(Z)", "0.0005", Value)) %>% 
+  mutate(Value = str_replace_all(Value,",","")) %>% 
+  mutate(Value = as.numeric(Value))
+strawberry <- strawberry %>%
+  mutate(`CV (%)` = ifelse(`CV (%)` == "(D)", NA, `CV (%)`)) %>%
+  mutate(`CV (%)` = ifelse(`CV (%)` == "(NA)", NA, `CV (%)`)) %>% 
+  mutate(`CV (%)` = ifelse(`CV (%)` == "(L)", "0.05", `CV (%)`)) %>% 
+  mutate(`CV (%)` = ifelse(`CV (%)` == "(H)", "99.95", `CV (%)`)) %>% 
+  mutate(`CV (%)` = str_replace_all(`CV (%)`,",","")) %>% 
+  mutate(`CV (%)` = as.numeric(`CV (%)`))
 glimpse(strawberry)
 ```
 
