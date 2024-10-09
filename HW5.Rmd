@@ -18,6 +18,7 @@ Set-up
 library(knitr)  
 library(kableExtra)
 library(tidyverse)
+library(rstanarm)
 ```
 
 Read the data and take a first look
@@ -144,6 +145,9 @@ strawberry <- strawberry %>%
                            )) %>% 
   select(1:match("Utilizations", names(.)), Category, everything()) %>% 
   select(-Measurement,-Measurement1)
+strawberry$Metric <- str_trim(strawberry$Metric, side = "both")
+strawberry$Category <- str_trim(strawberry$Category, side = "both")
+strawberry <- strawberry %>% mutate(across(Remark, ~ na_if(., "")))
 glimpse(strawberry)
 ```
 
@@ -176,7 +180,6 @@ strawberry <- strawberry %>%
   mutate(Domain = str_replace(Domain, "CHEMICAL, ", ""))
 glimpse(strawberry)
 ```
-
 ## Transfer data type into correct one
 
 In 'strawberry', we find that 'Value' and 'CV(%)' columns are both string type, which is not correct for the numeric. With EDA, (D) means that data exists but not provided because of privacy, with some (D) we can just use sum to estimate every single area, some may need some investigation. In this case, we have to analyze different (D) under different circumstance. In this case, I just transfer it into NA Also, we transfer (L) into 0.05, (H) into 99.95, and (Z) into 0.0005 based on the Quick Stats Glossary.
@@ -197,9 +200,104 @@ strawberry <- strawberry %>%
 glimpse(strawberry)
 ```
 
-## Write in a new csv
+## Separate the data in certain category
+```{r}
+#First we split the table in 'census' and 'survey'
+strawberry_census <- strawberry %>% filter(Program == "CENSUS")
+strawberry_survey <- strawberry %>% filter(Program == "SURVEY")
+strawberry_census <- drop_one_value_col(strawberry_census)
+strawberry_survey <- drop_one_value_col(strawberry_survey)
+```
+```{r}
+#Second we split the census table into organic and non-organic
+strawberry_organic <- strawberry_census %>% filter(Domain == "ORGANIC STATUS")
+strawberry_organic <- drop_one_value_col(strawberry_organic)
+strawberry_non_organic <- strawberry_census %>% filter(!Domain == "ORGANIC STATUS")
+strawberry_non_organic <- drop_one_value_col(strawberry_non_organic)
+```
+```{r}
+#Third we split the survey table into chemical and non-chemical
+strawberry_chemical <- strawberry_survey %>% filter(!Domain == "TOTAL")
+strawberry_chemical <- drop_one_value_col(strawberry_chemical)
+strawberry_non_chemical <- strawberry_survey %>% filter(Domain == "TOTAL")
+strawberry_non_chemical <- drop_one_value_col(strawberry_non_chemical)
+#Now we have four table for organic, non-organic, chemical and non-chemical
+```
+
+## Estimate the NA in Value and CV(%)
+In this section, we are going to use linear regression to estimated the the NA in both columns.
+```{r}
+#First, we estimate the NA in the strawberry_organic table.
+#Value
+strawberry_organic1 <- strawberry_organic %>% mutate(original_order = row_number())
+organic_with_value <- strawberry_organic1 %>% filter(!is.na(Value))
+organic_missing_value <- strawberry_organic1 %>% filter(is.na(Value))
+organicvaluemodel <- lm(log(Value) ~ factor(Year) + State + Category, data = organic_with_value)
+organic_missing_value <- organic_missing_value %>%
+  mutate(Value = round(exp(predict(organicvaluemodel, newdata = organic_missing_value)),1))
+organic_filled <- bind_rows(organic_with_value, organic_missing_value)
+organic_filled <- organic_filled %>% arrange(original_order)
+#CV
+organic_with_CV <- organic_filled %>% filter(!is.na(`CV (%)`))
+organic_missing_CV <- organic_filled %>% filter(is.na(`CV (%)`))
+organicCVmodel <- lm(`CV (%)` ~ factor(Year) + State + Category, data = organic_with_CV)
+organic_missing_CV <- organic_missing_CV %>%
+  mutate(`CV (%)` = round(predict(organicCVmodel, newdata = organic_missing_CV),2))
+organic_full <- bind_rows(organic_with_CV, organic_missing_CV)
+#In the original frame, there exists (L) and (H) to express the abnormal value so we just keep value greater than 100 in the CV(%).
+strawberry_organic <- organic_full %>% arrange(original_order) %>% select(-original_order) %>% mutate(Value = round(Value,1))
+```
+```{r}
+#Next, we estimate the NA in the strawberry_non_organic table.
+#Value
+strawberry_non_organic1 <- strawberry_non_organic %>% mutate(original_order = row_number())
+non_organic_with_value <- strawberry_non_organic1 %>% filter(!is.na(Value))
+non_organic_missing_value <- strawberry_non_organic1 %>% filter(is.na(Value))
+non_organicvaluemodel <- lm(Value ~  State + Category + Domain + `Domain Category`, data = non_organic_with_value)
+non_organic_missing_value <- non_organic_missing_value %>%
+  mutate(Value = round(predict(non_organicvaluemodel, newdata = non_organic_missing_value),1))
+non_organic_filled <- bind_rows(non_organic_with_value, non_organic_missing_value)
+non_organic_filled <- non_organic_filled %>% arrange(original_order)
+#CV
+non_organic_with_CV <- non_organic_filled %>% filter(!is.na(`CV (%)`))
+non_organic_missing_CV <- non_organic_filled %>% filter(is.na(`CV (%)`))
+non_organicCVmodel <- lm(`CV (%)` ~ State + Category + Domain + `Domain Category`, data = non_organic_with_CV)
+non_organic_missing_CV <- non_organic_missing_CV %>%
+  mutate(`CV (%)` = round(predict(non_organicCVmodel, newdata = non_organic_missing_CV),2))
+non_organic_full <- bind_rows(non_organic_with_CV, non_organic_missing_CV)
+strawberry_non_organic <- organic_full %>% arrange(original_order) %>% select(-original_order) %>% mutate(Value = round(Value,1))
+```
+```{r}
+#Then, we estimate the NA in the strawberry_chemical table. There is no CV columns in chemical table.
+strawberry_chemical1 <- strawberry_chemical %>% mutate(original_order = row_number())
+chemical_with_value <- strawberry_chemical1 %>% filter(!is.na(Value))
+chemical_missing_value <- strawberry_chemical1 %>% filter(is.na(Value))
+chemicalvaluemodel <- lm(log(Value) ~ factor(Year) + State + Category + Domain, data = chemical_with_value)
+chemical_missing_value <- chemical_missing_value %>%
+  mutate(Value = round(exp(predict(chemicalvaluemodel, newdata = chemical_missing_value)),1))
+chemical_filled <- bind_rows(chemical_with_value, chemical_missing_value)
+strawberry_chemical <- chemical_filled %>% arrange(original_order) %>% select(-original_order) %>% mutate(Value = round(Value,1))
+```
+```{r}
+#Finally, we estimate the NA in the strawberry_non_chemical table. There is also no CV columns in non-chemical table.
+strawberry_non_chemical1 <- strawberry_non_chemical %>% mutate(original_order = row_number())
+non_chemical_with_value <- strawberry_non_chemical1 %>% filter(!is.na(Value))
+non_chemical_missing_value <- strawberry_non_chemical1 %>% filter(is.na(Value))
+non_chemicalvaluemodel <- lm(log(Value+1) ~ factor(Year) + State + Category + Period, data = non_chemical_with_value)
+non_chemical_missing_value <- non_chemical_missing_value %>%
+  mutate(Value = round(exp(predict(non_chemicalvaluemodel, newdata = non_chemical_missing_value))-1,1))
+non_chemical_filled <- bind_rows(non_chemical_with_value, non_chemical_missing_value)
+strawberry_non_chemical <- non_chemical_filled %>% arrange(original_order) %>% select(-original_order) %>% mutate(Value = round(Value,1))
+```
+
+
+
+## Write in four new csvs
 As we have done data cleaning, we want to get a new csv that contains all the data we have cleaned
 ```{r}
-write.csv(strawberry, "Strawberry_cleaned.csv", row.names = FALSE)
+write.csv(strawberry_organic, "Strawberry_organic.csv", row.names = FALSE)
+write.csv(strawberry_non_organic, "Strawberry_non_organic.csv", row.names = FALSE)
+write.csv(strawberry_chemical, "Strawberry_chemical.csv", row.names = FALSE)
+write.csv(strawberry_non_chemical, "Strawberry_non_chemical.csv", row.names = FALSE)
 ```
 
